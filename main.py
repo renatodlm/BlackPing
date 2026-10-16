@@ -134,6 +134,52 @@ def established_targets(pids: set[int]) -> list[tuple[str, int]]:
     return sorted(found, key=lambda item: (role_for(item[1]) != "jogo", item[1], item[0]))
 
 
+ROLE_ORDER = ("jogo", "web", "tcp")
+
+
+def display_rows(conns: list[dict], grouped: bool, show_ips: bool) -> list[dict]:
+    if grouped:
+        buckets: dict[str, list[dict]] = {}
+        for conn in conns:
+            buckets.setdefault(conn["role"], []).append(conn)
+        roles = [role for role in ROLE_ORDER if role in buckets]
+        roles.extend(role for role in buckets if role not in ROLE_ORDER)
+        rows = []
+        for role in roles:
+            group = buckets[role]
+            samples = [item["ms"] for item in group if item["ms"] is not None]
+            average = sum(samples) / len(samples) if samples else None
+            if show_ips:
+                extra = group[0]["ip"] if len(group) == 1 else f"{group[0]['ip']} +{len(group) - 1}"
+            elif len(group) > 1:
+                extra = "média"
+            else:
+                extra = str(group[0]["port"])
+            rows.append({
+                "key": ("tipo", role),
+                "ms": average,
+                "title": role.upper(),
+                "meta": extra,
+            })
+        return rows
+
+    rows = []
+    for conn in conns:
+        if show_ips:
+            title = conn["ip"]
+            meta = f"{conn['port']}  {conn['role'].upper()}"
+        else:
+            title = conn["role"].upper()
+            meta = str(conn["port"])
+        rows.append({
+            "key": (conn["ip"], conn["port"]),
+            "ms": conn["ms"],
+            "title": title,
+            "meta": meta,
+        })
+    return rows
+
+
 def collect() -> dict:
     now = datetime.now().strftime("%H:%M:%S")
     try:
@@ -203,8 +249,8 @@ class ConnRow(ctk.CTkFrame):
         ms = conn["ms"]
         color = color_for(ms)
         self.ms.configure(text="--" if ms is None else f"{round(ms)}ms", text_color=color)
-        self.addr.configure(text=conn["ip"])
-        self.meta.configure(text=f"{conn['port']}  {conn['role'].upper()}")
+        self.addr.configure(text=conn["title"])
+        self.meta.configure(text=conn["meta"])
         self.bar.configure(fg_color=color)
 
 
@@ -219,8 +265,9 @@ class App(ctk.CTk):
 
         self.stop = threading.Event()
         self.events: queue.Queue = queue.Queue()
-        self.cards: dict[tuple[str, int], ConnRow] = {}
+        self.cards: dict[tuple, ConnRow] = {}
         self.placeholder: ctk.CTkLabel | None = None
+        self._snapshot: dict | None = None
         self.overlay = False
         self._sized_once = False
         self.hit_window: ctk.CTkToplevel | None = None
@@ -284,6 +331,43 @@ class App(ctk.CTk):
         self.unpin_button.grid(row=0, column=2, sticky="e")
         self.unpin_button.grid_remove()
 
+        self.options = ctk.CTkFrame(self.shell, fg_color="transparent")
+        self.options.pack(fill="x", padx=8, pady=(0, 2))
+
+        switch_font = ctk.CTkFont(family="Bahnschrift", size=11)
+        self.group_switch = ctk.CTkSwitch(
+            self.options,
+            text="média",
+            command=self._refresh_view,
+            font=switch_font,
+            text_color=SUBTLE,
+            progress_color=GOLD,
+            button_color=GOLD,
+            button_hover_color="#f0d7a0",
+            width=84,
+            height=22,
+            switch_width=32,
+            switch_height=16,
+        )
+        self.group_switch.pack(side="left")
+        self.group_switch.select()
+
+        self.ip_switch = ctk.CTkSwitch(
+            self.options,
+            text="ips",
+            command=self._refresh_view,
+            font=switch_font,
+            text_color=SUBTLE,
+            progress_color=GOLD,
+            button_color=GOLD,
+            button_hover_color="#f0d7a0",
+            width=68,
+            height=22,
+            switch_width=32,
+            switch_height=16,
+        )
+        self.ip_switch.pack(side="left", padx=(10, 0))
+
         self.body = ctk.CTkFrame(self.shell, fg_color="transparent")
         self.body.pack(fill="both", expand=True, padx=8, pady=(2, 8))
         self.body.grid_columnconfigure(0, weight=1)
@@ -309,7 +393,7 @@ class App(ctk.CTk):
     def _set_mouse_passthrough(self, enabled: bool) -> None:
         hwnd = self._top_hwnd()
         if enabled:
-            self.attributes("-alpha", 0.5)
+            self.attributes("-alpha", 0.6)
             self.update_idletasks()
         style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
         if enabled:
@@ -320,7 +404,7 @@ class App(ctk.CTk):
             style |= WS_EX_APPWINDOW
         user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style)
         if enabled:
-            user32.SetLayeredWindowAttributes(hwnd, 0, 128, 0x2)
+            user32.SetLayeredWindowAttributes(hwnd, 0, 153, 0x2)
         flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED
         user32.SetWindowPos(hwnd, HWND_TOPMOST if enabled else HWND_NOTOPMOST, 0, 0, 0, 0, flags)
         if not enabled:
@@ -400,9 +484,11 @@ class App(ctk.CTk):
         if enabled:
             self.top_switch.grid_remove()
             self.unpin_button.grid()
+            self.options.pack_forget()
             return
         self.unpin_button.grid_remove()
         self.top_switch.grid()
+        self.options.pack(fill="x", padx=8, pady=(0, 2), before=self.body)
 
     def toggle_top(self) -> None:
         self._set_overlay(bool(self.top_switch.get()))
@@ -485,21 +571,33 @@ class App(ctk.CTk):
         if not self.stop.is_set():
             self.after(150, self.poll)
 
+    def _grouped(self) -> bool:
+        return bool(self.group_switch.get())
+
+    def _show_ips(self) -> bool:
+        return bool(self.ip_switch.get())
+
+    def _refresh_view(self) -> None:
+        self.cards = {}
+        if self._snapshot is not None:
+            self.render(self._snapshot)
+
     def render(self, snapshot: dict) -> None:
-        conns = snapshot["conns"]
+        self._snapshot = snapshot
+        conns = display_rows(snapshot["conns"], self._grouped(), self._show_ips())
         if snapshot["error"]:
             status = f"SEM ACESSO  {snapshot['at']}"
         elif not snapshot["running"]:
             status = f"OFFLINE  {snapshot['at']}"
-        elif not conns:
+        elif not snapshot["conns"]:
             status = f"SEM LINK  {snapshot['at']}"
         else:
-            status = f"{len(conns)} LINKS  {snapshot['at']}"
+            status = f"{len(snapshot['conns'])} LINKS  {snapshot['at']}"
         self.status.configure(text=status)
 
-        keys = [(conn["ip"], conn["port"]) for conn in conns]
+        keys = [conn["key"] for conn in conns]
         if keys and keys == list(self.cards):
-            by_key = {(conn["ip"], conn["port"]): conn for conn in conns}
+            by_key = {conn["key"]: conn for conn in conns}
             for key, card in self.cards.items():
                 card.update_conn(by_key[key])
             return
