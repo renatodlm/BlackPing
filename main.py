@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import ctypes
 import queue
 import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from ctypes import wintypes
 from datetime import datetime
 
 import customtkinter as ctk
@@ -16,15 +18,60 @@ INTERVAL_S = 3.0
 PROBE_TIMEOUT_S = 1.0
 GAME_PROCESS = "blackdesert64.exe"
 
-GREEN = "#3fb950"
-YELLOW = "#d29922"
-RED = "#f85149"
-MUTED = "#8b949e"
-CARD = "#161b22"
-BORDER = "#30363d"
-TEXT = "#e6edf3"
-SUBTLE = "#9da7b3"
-BG = "#0d1117"
+GREEN = "#b6ff4a"
+YELLOW = "#ffcc33"
+RED = "#ff4d4d"
+MUTED = "#8d866f"
+CARD = "#12140f"
+LINE = "#3a3424"
+TEXT = "#f3ecd8"
+SUBTLE = "#b7aa8c"
+BG = "#070806"
+GOLD = "#e2c27a"
+GOLD_DIM = "#6e5a32"
+
+GWL_EXSTYLE = -20
+WS_EX_LAYERED = 0x00080000
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_APPWINDOW = 0x00040000
+WS_EX_NOACTIVATE = 0x08000000
+SWP_NOMOVE = 0x0002
+SWP_NOSIZE = 0x0001
+SWP_NOACTIVATE = 0x0010
+SWP_FRAMECHANGED = 0x0020
+SWP_SHOWWINDOW = 0x0040
+HWND_TOPMOST = -1
+HWND_NOTOPMOST = -2
+GA_ROOT = 2
+PASS_THROUGH = WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
+
+user32 = ctypes.windll.user32
+user32.GetParent.argtypes = [wintypes.HWND]
+user32.GetParent.restype = wintypes.HWND
+user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+user32.GetAncestor.restype = wintypes.HWND
+user32.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+user32.SetWindowPos.argtypes = [
+    wintypes.HWND,
+    wintypes.HWND,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_int,
+    wintypes.UINT,
+]
+user32.SetWindowPos.restype = wintypes.BOOL
+user32.SetLayeredWindowAttributes.argtypes = [
+    wintypes.HWND,
+    wintypes.COLORREF,
+    wintypes.BYTE,
+    wintypes.DWORD,
+]
+user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
 
 
 def role_for(port: int) -> str:
@@ -111,49 +158,49 @@ def collect() -> dict:
     return {"running": True, "conns": measured, "error": None, "at": now}
 
 
-class ConnCard(ctk.CTkFrame):
+class ConnRow(ctk.CTkFrame):
     def __init__(self, master, conn: dict):
-        super().__init__(master, fg_color=CARD, corner_radius=12, border_width=1, border_color=BORDER)
-        self.grid_columnconfigure(1, weight=1)
+        super().__init__(master, fg_color=CARD, corner_radius=2, border_width=1, border_color=LINE)
+        self.grid_columnconfigure(2, weight=1)
 
-        self.bar = ctk.CTkFrame(self, width=4, height=36, corner_radius=4, fg_color=MUTED)
-        self.bar.grid(row=0, column=0, rowspan=2, sticky="nsw", padx=(14, 12), pady=14)
+        self.bar = ctk.CTkFrame(self, width=3, height=16, corner_radius=0, fg_color=MUTED)
+        self.bar.grid(row=0, column=0, padx=(8, 6), pady=7)
         self.bar.grid_propagate(False)
+
+        self.ms = ctk.CTkLabel(
+            self,
+            text="",
+            width=54,
+            anchor="w",
+            font=ctk.CTkFont(family="Consolas", size=14, weight="bold"),
+        )
+        self.ms.grid(row=0, column=1, sticky="w")
 
         self.addr = ctk.CTkLabel(
             self,
             text="",
             anchor="w",
-            font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"),
+            font=ctk.CTkFont(family="Consolas", size=12),
             text_color=TEXT,
         )
-        self.addr.grid(row=0, column=1, sticky="ew", pady=(12, 0))
+        self.addr.grid(row=0, column=2, sticky="ew", padx=(6, 4))
 
         self.meta = ctk.CTkLabel(
             self,
             text="",
-            anchor="w",
-            font=ctk.CTkFont(family="Segoe UI", size=12),
+            anchor="e",
+            font=ctk.CTkFont(family="Bahnschrift", size=11),
             text_color=SUBTLE,
         )
-        self.meta.grid(row=1, column=1, sticky="ew", pady=(0, 12))
-
-        self.ms = ctk.CTkLabel(
-            self,
-            text="",
-            anchor="e",
-            font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"),
-        )
-        self.ms.grid(row=0, column=2, rowspan=2, sticky="e", padx=(8, 16))
+        self.meta.grid(row=0, column=3, sticky="e", padx=(4, 8))
         self.update_conn(conn)
 
     def update_conn(self, conn: dict) -> None:
         ms = conn["ms"]
         color = color_for(ms)
-        shown = "—" if ms is None else f"{round(ms)} ms"
+        self.ms.configure(text="--" if ms is None else f"{round(ms)}ms", text_color=color)
         self.addr.configure(text=conn["ip"])
-        self.meta.configure(text=f"porta {conn['port']}  ·  {conn['role']}")
-        self.ms.configure(text=shown, text_color=color)
+        self.meta.configure(text=f"{conn['port']}  {conn['role'].upper()}")
         self.bar.configure(fg_color=color)
 
 
@@ -161,68 +208,235 @@ class App(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("BlackPing")
-        self.geometry("460x560")
-        self.minsize(400, 420)
+        self.geometry("372x248")
+        self.minsize(320, 148)
         self.configure(fg_color=BG)
 
         self.stop = threading.Event()
         self.events: queue.Queue = queue.Queue()
-        self.cards: dict[tuple[str, int], ConnCard] = {}
+        self.cards: dict[tuple[str, int], ConnRow] = {}
         self.placeholder: ctk.CTkLabel | None = None
+        self.overlay = False
+        self._sized_once = False
+        self.hit_window: ctk.CTkToplevel | None = None
 
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", padx=20, pady=(18, 6))
-        header.grid_columnconfigure(0, weight=1)
+        self.shell = ctk.CTkFrame(self, fg_color=BG, corner_radius=0, border_width=1, border_color=LINE)
+        self.shell.pack(fill="both", expand=True)
+
+        ctk.CTkFrame(self.shell, height=2, fg_color=GOLD, corner_radius=0).pack(fill="x")
+
+        header = ctk.CTkFrame(self.shell, fg_color="transparent")
+        header.pack(fill="x", padx=8, pady=(6, 2))
+        header.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(
             header,
-            text="BlackPing",
+            text="BLACKPING",
             anchor="w",
-            font=ctk.CTkFont(family="Segoe UI", size=26, weight="bold"),
-            text_color=TEXT,
+            font=ctk.CTkFont(family="Bahnschrift", size=13, weight="bold"),
+            text_color=GOLD,
         ).grid(row=0, column=0, sticky="w")
-
-        self.top_switch = ctk.CTkSwitch(
-            header,
-            text="Sempre no topo",
-            command=self.toggle_top,
-            font=ctk.CTkFont(family="Segoe UI", size=12),
-            progress_color=GREEN,
-        )
-        self.top_switch.grid(row=0, column=1, sticky="e", padx=(12, 0))
 
         self.status = ctk.CTkLabel(
             header,
-            text="Lendo conexões…",
+            text="LENDO",
             anchor="w",
-            font=ctk.CTkFont(family="Segoe UI", size=13),
+            font=ctk.CTkFont(family="Bahnschrift", size=11),
             text_color=SUBTLE,
         )
-        self.status.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        self.status.grid(row=0, column=1, sticky="w", padx=(8, 6))
 
-        self.list = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.list.pack(fill="both", expand=True, padx=12, pady=(10, 4))
+        self.top_switch = ctk.CTkSwitch(
+            header,
+            text="no topo",
+            command=self.toggle_top,
+            font=ctk.CTkFont(family="Bahnschrift", size=11),
+            text_color=SUBTLE,
+            progress_color=GOLD,
+            button_color=GOLD,
+            button_hover_color="#f0d7a0",
+            width=96,
+            height=22,
+            switch_width=32,
+            switch_height=16,
+        )
+        self.top_switch.grid(row=0, column=2, sticky="e")
 
-        self.body = ctk.CTkFrame(self.list, fg_color="transparent")
-        self.body.pack(fill="both", expand=True)
+        self.unpin_button = ctk.CTkButton(
+            header,
+            text="desafixar",
+            width=76,
+            height=22,
+            corner_radius=2,
+            fg_color="#1a160d",
+            hover_color="#3a3018",
+            border_width=1,
+            border_color=GOLD,
+            text_color=GOLD,
+            font=ctk.CTkFont(family="Bahnschrift", size=11, weight="bold"),
+            command=self.unpin,
+        )
+        self.unpin_button.grid(row=0, column=2, sticky="e")
+        self.unpin_button.grid_remove()
+
+        self.body = ctk.CTkFrame(self.shell, fg_color="transparent")
+        self.body.pack(fill="both", expand=True, padx=8, pady=(2, 8))
         self.body.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            self,
-            text="Tempo de conexão TCP. Os servidores do jogo não respondem ao ping comum.",
-            font=ctk.CTkFont(family="Segoe UI", size=11),
-            text_color="#6e7681",
-            wraplength=410,
-            justify="left",
-        ).pack(fill="x", padx=22, pady=(4, 16))
 
         self.worker = threading.Thread(target=self.loop, name="blackping", daemon=True)
         self.worker.start()
         self.after(150, self.poll)
+        self.bind("<Escape>", self._on_escape)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
+    def _widget_hwnd(self, widget) -> int:
+        hwnd = int(widget.winfo_id())
+        root = user32.GetAncestor(hwnd, GA_ROOT)
+        if root:
+            return int(root)
+        parent = user32.GetParent(hwnd)
+        return int(parent or hwnd)
+
+    def _top_hwnd(self) -> int:
+        return self._widget_hwnd(self)
+
+    def _set_mouse_passthrough(self, enabled: bool) -> None:
+        hwnd = self._top_hwnd()
+        if enabled:
+            self.attributes("-alpha", 0.5)
+            self.update_idletasks()
+        style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+        if enabled:
+            style |= PASS_THROUGH
+            style &= ~WS_EX_APPWINDOW
+        else:
+            style &= ~PASS_THROUGH
+            style |= WS_EX_APPWINDOW
+        user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style)
+        if enabled:
+            user32.SetLayeredWindowAttributes(hwnd, 0, 128, 0x2)
+        flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED
+        user32.SetWindowPos(hwnd, HWND_TOPMOST if enabled else HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+        if not enabled:
+            self.attributes("-alpha", 1.0)
+
+    def _ensure_hit_window(self) -> None:
+        if self.hit_window is not None:
+            return
+        win = ctk.CTkToplevel(self)
+        win.withdraw()
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(fg_color="#1a160d")
+        win.title("")
+        self.hit_button = ctk.CTkButton(
+            win,
+            text="desafixar",
+            width=76,
+            height=22,
+            corner_radius=2,
+            fg_color="#1a160d",
+            hover_color="#3a3018",
+            border_width=1,
+            border_color=GOLD,
+            text_color=GOLD,
+            font=ctk.CTkFont(family="Bahnschrift", size=11, weight="bold"),
+            command=self.unpin,
+        )
+        self.hit_button.pack(fill="both", expand=True)
+        self.hit_window = win
+
+    def _style_hit_window(self) -> None:
+        if self.hit_window is None:
+            return
+        hwnd = self._widget_hwnd(self.hit_window)
+        style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+        style |= WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_LAYERED
+        style &= ~(WS_EX_TRANSPARENT | WS_EX_APPWINDOW)
+        user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style)
+        user32.SetLayeredWindowAttributes(hwnd, 0, 1, 0x2)
+
+    def _place_hit_button(self) -> None:
+        if not self.overlay or self.hit_window is None or not self.unpin_button.winfo_ismapped():
+            return
+        self.update_idletasks()
+        x = self.unpin_button.winfo_rootx()
+        y = self.unpin_button.winfo_rooty()
+        width = max(76, self.unpin_button.winfo_width())
+        height = max(22, self.unpin_button.winfo_height())
+        hwnd = self._widget_hwnd(self.hit_window)
+        user32.SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        )
+        self._style_hit_window()
+
+    def _hide_hit_button(self) -> None:
+        if self.hit_window is not None:
+            self.hit_window.withdraw()
+
+    def _fit_overlay(self) -> None:
+        if not self.overlay or not self.winfo_exists():
+            return
+        self.update_idletasks()
+        width = 360
+        height = max(92, self.shell.winfo_reqheight())
+        x, y = self.winfo_x(), self.winfo_y()
+        self.geometry(f"{width}x{height}+{x}+{y}")
+        self._place_hit_button()
+
+    def _apply_overlay_chrome(self, enabled: bool) -> None:
+        if enabled:
+            self.top_switch.grid_remove()
+            self.unpin_button.grid()
+            return
+        self.unpin_button.grid_remove()
+        self.top_switch.grid()
+
     def toggle_top(self) -> None:
-        self.attributes("-topmost", bool(self.top_switch.get()))
+        self._set_overlay(bool(self.top_switch.get()))
+
+    def unpin(self) -> None:
+        if bool(self.top_switch.get()):
+            self.top_switch.deselect()
+        self._set_overlay(False)
+
+    def _on_escape(self, _event=None):
+        if self.overlay:
+            self.unpin()
+
+    def _set_overlay(self, enabled: bool) -> None:
+        if enabled == self.overlay:
+            return
+        self.update_idletasks()
+        x, y = self.winfo_x(), self.winfo_y()
+        width = 360 if enabled else max(360, self.winfo_width())
+        height = self.winfo_height()
+        self.withdraw()
+        self.overlay = enabled
+        self.overrideredirect(enabled)
+        self._apply_overlay_chrome(enabled)
+        if enabled:
+            self.geometry(f"+{x}+{y}")
+        else:
+            self.geometry(f"{width}x{max(height, 180)}+{x}+{y}")
+            self.minsize(320, 148)
+        self.deiconify()
+        self.attributes("-topmost", enabled)
+        self.update_idletasks()
+        self._set_mouse_passthrough(enabled)
+        if enabled:
+            self._ensure_hit_window()
+            self._fit_overlay()
+            self._place_hit_button()
+            self.after(120, self._place_hit_button)
+        else:
+            self._hide_hit_button()
 
     def loop(self) -> None:
         while not self.stop.is_set():
@@ -255,14 +469,13 @@ class App(ctk.CTk):
     def render(self, snapshot: dict) -> None:
         conns = snapshot["conns"]
         if snapshot["error"]:
-            status = f"Não consegui ler as conexões.  {snapshot['at']}"
+            status = f"SEM ACESSO  {snapshot['at']}"
         elif not snapshot["running"]:
-            status = f"Black Desert fechado  ·  {snapshot['at']}"
+            status = f"OFFLINE  {snapshot['at']}"
         elif not conns:
-            status = f"Jogo aberto, sem conexão TCP  ·  {snapshot['at']}"
+            status = f"SEM LINK  {snapshot['at']}"
         else:
-            noun = "conexão" if len(conns) == 1 else "conexões"
-            status = f"Black Desert  ·  {len(conns)} {noun}  ·  {snapshot['at']}"
+            status = f"{len(conns)} LINKS  {snapshot['at']}"
         self.status.configure(text=status)
 
         keys = [(conn["ip"], conn["port"]) for conn in conns]
@@ -281,26 +494,41 @@ class App(ctk.CTk):
 
         if not conns:
             if snapshot["error"]:
-                message = "Sem permissão para ler as conexões do jogo."
+                message = "Sem permissão para ler as conexões."
             elif snapshot["running"]:
-                message = "O jogo está aberto, mas não há conexões TCP agora."
+                message = "Jogo aberto, sem conexão TCP."
             else:
-                message = "Abra o Black Desert para ver o ping."
+                message = "Abra o Black Desert."
             self.placeholder = ctk.CTkLabel(
                 self.body,
                 text=message,
-                font=ctk.CTkFont(family="Segoe UI", size=14),
+                font=ctk.CTkFont(family="Bahnschrift", size=12),
                 text_color=SUBTLE,
-                wraplength=360,
+                wraplength=300,
                 justify="left",
             )
-            self.placeholder.grid(row=0, column=0, sticky="ew", padx=8, pady=28)
+            self.placeholder.grid(row=0, column=0, sticky="ew", padx=4, pady=8)
+            if self.overlay:
+                self.after_idle(self._fit_overlay)
             return
 
         for index, conn in enumerate(conns):
-            card = ConnCard(self.body, conn)
-            card.grid(row=index, column=0, sticky="ew", pady=5, padx=4)
+            card = ConnRow(self.body, conn)
+            card.grid(row=index, column=0, sticky="ew", pady=2)
             self.cards[(conn["ip"], conn["port"])] = card
+        if self.overlay:
+            self.after_idle(self._fit_overlay)
+        elif not self._sized_once:
+            self._sized_once = True
+            self.after_idle(self._fit_normal)
+
+    def _fit_normal(self) -> None:
+        if self.overlay or not self.winfo_exists():
+            return
+        self.update_idletasks()
+        height = min(420, max(168, self.shell.winfo_reqheight() + 8))
+        x, y = self.winfo_x(), self.winfo_y()
+        self.geometry(f"372x{height}+{x}+{y}")
 
     def on_close(self) -> None:
         self.stop.set()
