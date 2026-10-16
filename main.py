@@ -10,6 +10,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ctypes import wintypes
 from datetime import datetime
+from pathlib import Path
+import tkinter as tk
 
 import customtkinter as ctk
 import psutil
@@ -17,6 +19,8 @@ import psutil
 INTERVAL_S = 3.0
 PROBE_TIMEOUT_S = 1.0
 GAME_PROCESS = "blackdesert64.exe"
+ICON_PATH = Path(__file__).resolve().with_name("blackping.ico")
+ICON_PNG = Path(__file__).resolve().with_name("blackping.png")
 
 GREEN = "#b6ff4a"
 YELLOW = "#ffcc33"
@@ -211,6 +215,7 @@ class App(ctk.CTk):
         self.geometry("372x248")
         self.minsize(320, 148)
         self.configure(fg_color=BG)
+        self._apply_icon()
 
         self.stop = threading.Event()
         self.events: queue.Queue = queue.Queue()
@@ -283,6 +288,7 @@ class App(ctk.CTk):
         self.body.pack(fill="both", expand=True, padx=8, pady=(2, 8))
         self.body.grid_columnconfigure(0, weight=1)
 
+        self.after(200, self._apply_icon)
         self.worker = threading.Thread(target=self.loop, name="blackping", daemon=True)
         self.worker.start()
         self.after(150, self.poll)
@@ -437,6 +443,19 @@ class App(ctk.CTk):
             self.after(120, self._place_hit_button)
         else:
             self._hide_hit_button()
+        self._apply_icon()
+
+    def _apply_icon(self) -> None:
+        if not ICON_PATH.is_file() or not self.winfo_exists():
+            return
+        try:
+            if ICON_PATH.is_file():
+                self.iconbitmap(default=str(ICON_PATH))
+            if ICON_PNG.is_file():
+                self._icon_image = tk.PhotoImage(file=str(ICON_PNG))
+                self.iconphoto(True, self._icon_image)
+        except tk.TclError:
+            return
 
     def loop(self) -> None:
         while not self.stop.is_set():
@@ -536,6 +555,10 @@ class App(ctk.CTk):
 
 
 def main() -> None:
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("renatodlm.BlackPing")
+    except OSError:
+        pass
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("dark-blue")
     App().mainloop()

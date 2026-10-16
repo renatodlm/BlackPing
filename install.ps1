@@ -116,6 +116,8 @@ function Install-BlackPing {
     $link.WorkingDirectory = $Dest
     $link.Description = 'Monitor de ping do Black Desert'
     $link.WindowStyle = 1
+    $icon = Join-Path $Dest 'blackping.ico'
+    if (Test-Path $icon) { $link.IconLocation = "$icon,0" }
     $link.Save()
 
     Write-Host ""
