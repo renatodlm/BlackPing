@@ -76,6 +76,27 @@ user32.SetLayeredWindowAttributes.argtypes = [
     wintypes.DWORD,
 ]
 user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
+user32.LoadImageW.argtypes = [
+    wintypes.HINSTANCE,
+    wintypes.LPCWSTR,
+    wintypes.UINT,
+    ctypes.c_int,
+    ctypes.c_int,
+    wintypes.UINT,
+]
+user32.LoadImageW.restype = wintypes.HANDLE
+user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+user32.SendMessageW.restype = ctypes.c_ssize_t
+user32.SetClassLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+user32.SetClassLongPtrW.restype = ctypes.c_ssize_t
+
+WM_SETICON = 0x0080
+ICON_SMALL = 0
+ICON_BIG = 1
+IMAGE_ICON = 1
+LR_LOADFROMFILE = 0x0010
+GCLP_HICON = -14
+GCLP_HICONSM = -34
 
 
 def role_for(port: int) -> str:
@@ -532,16 +553,40 @@ class App(ctk.CTk):
         self._apply_icon()
 
     def _apply_icon(self) -> None:
-        if not ICON_PATH.is_file() or not self.winfo_exists():
+        if not self.winfo_exists():
             return
         try:
-            if ICON_PATH.is_file():
-                self.iconbitmap(default=str(ICON_PATH))
             if ICON_PNG.is_file():
                 self._icon_image = tk.PhotoImage(file=str(ICON_PNG))
                 self.iconphoto(True, self._icon_image)
+            if ICON_PATH.is_file():
+                self.iconbitmap(default=str(ICON_PATH))
         except tk.TclError:
+            pass
+        self._apply_taskbar_icon()
+
+    def _apply_taskbar_icon(self) -> None:
+        if not ICON_PATH.is_file() or not self.winfo_exists():
             return
+        self.update_idletasks()
+        big = user32.LoadImageW(0, str(ICON_PATH), IMAGE_ICON, 32, 32, LR_LOADFROMFILE)
+        small = user32.LoadImageW(0, str(ICON_PATH), IMAGE_ICON, 16, 16, LR_LOADFROMFILE)
+        if not big:
+            return
+        self._icon_handles = (big, small or big)
+        for hwnd in self._icon_hwnds():
+            user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, big)
+            user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, small or big)
+            user32.SetClassLongPtrW(hwnd, GCLP_HICON, big)
+            user32.SetClassLongPtrW(hwnd, GCLP_HICONSM, small or big)
+
+    def _icon_hwnds(self) -> list[int]:
+        inner = int(self.winfo_id())
+        found = []
+        for hwnd in (inner, user32.GetParent(inner), user32.GetAncestor(inner, GA_ROOT)):
+            if hwnd and int(hwnd) not in found:
+                found.append(int(hwnd))
+        return found
 
     def loop(self) -> None:
         while not self.stop.is_set():
@@ -632,7 +677,7 @@ class App(ctk.CTk):
         for index, conn in enumerate(conns):
             card = ConnRow(self.body, conn)
             card.grid(row=index, column=0, sticky="ew", pady=2)
-            self.cards[(conn["ip"], conn["port"])] = card
+            self.cards[conn["key"]] = card
         if self.overlay:
             self.after_idle(self._fit_overlay)
         elif not self._sized_once:
@@ -654,7 +699,10 @@ class App(ctk.CTk):
 
 def main() -> None:
     try:
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("renatodlm.BlackPing")
+        shell32 = ctypes.windll.shell32
+        shell32.SetCurrentProcessExplicitAppUserModelID.argtypes = [wintypes.LPCWSTR]
+        shell32.SetCurrentProcessExplicitAppUserModelID.restype = ctypes.HRESULT
+        shell32.SetCurrentProcessExplicitAppUserModelID("renatodlm.BlackPing")
     except OSError:
         pass
     ctk.set_appearance_mode("dark")
